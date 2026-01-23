@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langchain>=0.3.0,<0.4.0
+langchain-nvidia-ai-endpoints
+langchain-community
+langchain-core
+pydantic-settings
+python-dotenv
+pypdf
+faiss-cpu
