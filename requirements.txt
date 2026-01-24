@@ -7,4 +7,9 @@ langchain-core
 pydantic-settings
 python-dotenv
 pypdf
-faiss-cpu
+faiss-cpu 
+onnxruntime 
+joblib 
+numpy
+scikit-learn
+pandas

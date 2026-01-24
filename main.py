@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from utils.chatbot import get_chat_response_with_rag
+from utils.detection import detector
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Stunting Care AI API")
@@ -30,13 +31,32 @@ async def chat_endpoint(request: ChatRequest):
     response = get_chat_response_with_rag(request.message)
     return {"reply": response}
 
+class DetectionRequest(BaseModel):
+    gender: int           # 1 ,0
+    age: int              # bulan
+    birth_weight: float   # kg
+    birth_length: float   # cm
+    body_weight: float    # kg
+    body_length: float    # cm
+    breastfeeding: int    # 1 , 0
+
 @app.post("/api/detect")
-async def detect_endpoint(request: DetectionRequest):
-    status = "Normal"
-    if request.tinggi_badan < 70 and request.usia_bulan > 12:
-        status = "Indikasi Stunting"
+async def detect_stunting(data: DetectionRequest):
+    features = [
+        data.gender, 
+        data.age, 
+        data.birth_weight, 
+        data.birth_length, 
+        data.body_weight, 
+        data.body_length, 
+        data.breastfeeding
+    ]
+    
+    result = detector.predict(features)
+    
+    if result["status"] == "Stunting":
+        result["message"] = "Berdasarkan data, anak terindikasi stunting. Segera konsultasikan ke tenaga medis."
+    else:
+        result["message"] = "Pertumbuhan anak Anda terlihat normal. Tetap jaga pola makan dan nutrisi."
         
-    return {
-        "status_stunting": status,
-        "saran": "Segera konsultasikan ke puskesmas terdekat untuk pemeriksaan Z-Score."
-    }
+    return result
