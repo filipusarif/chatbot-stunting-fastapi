@@ -32,8 +32,8 @@ Pastikan Anda berada di lingkungan Linux (Arch Linux) Anda dan ikuti langkah-lan
 
 1. **Clone Repository & Masuk ke Folder BE**
 ```bash
-git clone <repository-url>
-cd stuntingcare-backend
+git clone https://github.com/filipusarif/chatbot-stunting-fastapi.git
+cd chatbot-stunting-fastapi
 
 ```
 
