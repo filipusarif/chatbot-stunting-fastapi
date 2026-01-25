@@ -15,6 +15,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    token: str
 
 class DetectionRequest(BaseModel):
     usia_bulan: int
@@ -28,8 +29,8 @@ def home():
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    response = get_chat_response_with_rag(request.message)
-    return {"reply": response}
+    answer = get_chat_response_with_rag(request.message, request.token)
+    return {"reply": answer}
 
 class DetectionRequest(BaseModel):
     gender: int           # 1 ,0
