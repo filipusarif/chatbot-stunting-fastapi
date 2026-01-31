@@ -7,6 +7,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from dotenv import load_dotenv
+from utils.detection import detector
+import json
+import re
 
 load_dotenv()
 
@@ -64,21 +67,102 @@ def get_retriever(api_key: str):
     return vectorstore.as_retriever()
 
 def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
-    """Fungsi utama yang dipanggil oleh FastAPI"""
     try:
-        # Inisialisasi model dan retriever dengan key yang dikirim
         llm, _ = get_models(api_key)
         retriever = get_retriever(api_key)
 
-        if not retriever:
-            return "Maaf, asisten belum memiliki basis data pengetahuan. Mohon hubungi admin untuk mengisi folder data/."
+        # 1. EKSTRAKSI DATA (Gunakan Prompt yang lebih ketat)
+        extraction_prompt = f"""
+        [SYSTEM: OUTPUT ONLY VALID JSON. NO PREAMBLE.]
+        Tugas: Klasifikasikan pesan user dan ekstrak data jika ada.
 
+        ATURAN IS_DETECTION:
+        - SET "is_detection": true HANYA JIKA user memberikan data angka (umur/tinggi/berat) ATAU secara eksplisit meminta dilakukan pengecekan/analisis pada kasus tertentu.
+        - SET "is_detection": false JIKA user bertanya secara umum (misal: "Halo", "Apa itu stunting?", "Bagaimana cara cek stunting?").
+        
+        Ekstrak 7 fitur medis jika ada: [Gender, Umur, BB_Lahir, TB_Lahir, BB_Skrg, TB_Skrg, ASI]
+
+        ATURAN KETAT:
+        - "data_lengkap" HANYA boleh true jika SEMUA 7 fitur memiliki angka (BUKAN null).
+        - Jika ada satu saja yang tidak disebutkan user, set "data_lengkap": false dan masukkan ke "data_kurang".
+        - JANGAN mengarang angka. Gunakan null jika tidak ada di pesan.
+
+        Kebutuhan Data: [Gender(0:Pr, 1:Lk), Umur(bln), BB_Lahir(kg), TB_Lahir(cm), BB_Skrg(kg), TB_Skrg(cm), ASI(0:Tdk, 1:Ya)]
+
+        FORMAT JSON:
+        {{
+          "is_detection": true,
+          "data_lengkap": false,
+          "data_kurang": ["field"],
+          "features": [7 numbers/null]
+        }}
+
+        Pesan User: "{user_input}"
+        """
+        
+        extraction_response = llm.invoke(extraction_prompt)
+        content = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
+        print("--- DEBUG RAW LLM OUTPUT ---")
+        print(content)
+        print("-----------------------------")
+        try:
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+                # Hapus trailing commas yang sering merusak json.loads
+                json_str = re.sub(r',\s*([\]}])', r'\1', json_str)
+                data = json.loads(json_str)
+            else:
+                data = {"is_detection": False}
+        except Exception as parse_error:
+            # DEBUG: Cetak error parsing jika ada
+            print(f"!!! JSON Parsing Error: {parse_error}")
+            data = {"is_detection": False}
+
+
+        # --- VALIDASI GANDA (Sisi Python) ---
+        is_det = str(data.get("is_detection")).lower() == 'true'
+        features = data.get("features", [])
+        
+        # Cek apakah ada nilai None/null di dalam list fitur
+        has_null = features is None or (isinstance(features, list) and (None in features or len(features) < 7))
+        
+        # Paksa data_lengkap menjadi False jika masih ada null
+        is_full = (str(data.get("data_lengkap")).lower() == 'true') and not has_null
+
+        # --- LOGIKA FOLLOW-UP ---
+        # Jika user ingin deteksi tapi data belum lengkap
+        # is_det = str(data.get("is_detection")).lower() == 'true'
+        # is_full = str(data.get("data_lengkap")).lower() == 'true'
+
+        if is_det and not is_full:
+            # Jika LLM lupa mengisi data_kurang padahal ada yang null, kita beri default
+            missing = data.get("data_kurang", [])
+            if not missing:
+                missing = ["Data kelahiran (Berat/Tinggi) atau status ASI"]
+            
+            missing_fields = ", ".join(missing)
+            return f"Saya siap membantu menganalisis status stunting si kecil. Namun, saya butuh data: **{missing_fields}**."
+        
+        # KONDISI 2: User ingin deteksi dan data lengkap
+        detection_result = "User bertanya secara umum."
+        if is_det and is_full:
+            # Pastikan key 'features' ada dan isinya list
+            features = data.get("features")
+            if features and len(features) == 7:
+                try:
+                    res = detector.predict(features)
+                    detection_result = f"HASIL ANALISIS MODEL CNN: Anak terindikasi {res['status']} ({res['probability']*100}%)."
+                except Exception as pred_error:
+                    print(f"!!! Prediction Error: {pred_error}")
+                    detection_result = "Gagal menjalankan model prediksi."
+
+        # --- LOGIKA RAG (Generate Jawaban Akhir) ---
         system_prompt = (
-            "Anda adalah asisten kesehatan ahli stunting. "
-            "Gunakan konteks berikut untuk menjawab pertanyaan: {context}. "
-            "Jika informasi tidak ada dalam konteks, katakan bahwa Anda tidak tahu, "
-            "namun tetap berikan saran umum kesehatan anak yang relevan. "
-            "Jawablah dengan bahasa Indonesia yang ramah."
+            "Anda adalah asisten kesehatan ahli stunting yang ramah. "
+            "Informasi Tambahan: {detection_info}. "
+            "Gunakan konteks dokumen: {context}. "
+            "Jawablah dengan bahasa Indonesia yang empati dan profesional."
         )
         
         prompt = ChatPromptTemplate.from_messages([
@@ -86,17 +170,59 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
             ("human", "{input}"),
         ])
 
-        # Bangun RAG Chain secara dinamis
+        # Bangun RAG Chain
         question_answer_chain = create_stuff_documents_chain(llm, prompt)
         rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
-        # Eksekusi
-        response = rag_chain.invoke({"input": user_input})
+        print("RAG Chain created successfully.", detection_result)
+        response = rag_chain.invoke({
+            "input": user_input,
+            "detection_info": detection_result # Menyuntikkan hasil CNN ke prompt
+        })
+        
         return response["answer"]
 
     except Exception as e:
-        # Tangani jika API Key salah atau kedaluwarsa
         error_msg = str(e)
-        if "401" in error_msg or "Unauthorized" in error_msg:
-            return "Error: API Key NVIDIA tidak valid atau sudah habis. Mohon perbarui di halaman Admin."
+        if "401" in error_msg:
+            return "Koneksi ke NVIDIA AI terputus. Mohon cek API Key di dashboard admin."
         return f"Terjadi kesalahan teknis: {error_msg}"
+
+
+# def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
+#     """Fungsi utama yang dipanggil oleh FastAPI"""
+#     try:
+#         # Inisialisasi model dan retriever dengan key yang dikirim
+#         llm, _ = get_models(api_key)
+#         retriever = get_retriever(api_key)
+
+#         if not retriever:
+#             return "Maaf, asisten belum memiliki basis data pengetahuan. Mohon hubungi admin untuk mengisi folder data/."
+
+#         system_prompt = (
+#             "Anda adalah asisten kesehatan ahli stunting. "
+#             "Gunakan konteks berikut untuk menjawab pertanyaan: {context}. "
+#             "Jika informasi tidak ada dalam konteks, katakan bahwa Anda tidak tahu, "
+#             "namun tetap berikan saran umum kesehatan anak yang relevan. "
+#             "Jawablah dengan bahasa Indonesia yang ramah."
+#         )
+        
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", system_prompt),
+#             ("human", "{input}"),
+#         ])
+
+#         # Bangun RAG Chain secara dinamis
+#         question_answer_chain = create_stuff_documents_chain(llm, prompt)
+#         rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+#         # Eksekusi
+#         response = rag_chain.invoke({"input": user_input})
+#         return response["answer"]
+
+#     except Exception as e:
+#         # Tangani jika API Key salah atau kedaluwarsa
+#         error_msg = str(e)
+#         if "401" in error_msg or "Unauthorized" in error_msg:
+#             return "Error: API Key NVIDIA tidak valid atau sudah habis. Mohon perbarui di halaman Admin."
+#         return f"Terjadi kesalahan teknis: {error_msg}"
