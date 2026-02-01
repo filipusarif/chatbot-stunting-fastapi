@@ -34,7 +34,6 @@ def get_retriever(api_key: str):
     """Memuat atau membuat vector store secara dinamis"""
     _, embeddings = get_models(api_key)
     
-    # 1. Jika database sudah ada, muat langsung
     if os.path.exists(DB_FAISS_PATH):
         vectorstore = FAISS.load_local(
             DB_FAISS_PATH, 
@@ -43,7 +42,6 @@ def get_retriever(api_key: str):
         )
         return vectorstore.as_retriever()
     
-    # 2. Jika belum ada, buat baru (Proses indexing)
     print("Database tidak ditemukan. Melakukan indexing data...")
     if not os.path.exists(DATA_PATH):
         os.makedirs(DATA_PATH)
@@ -71,7 +69,6 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
         llm, _ = get_models(api_key)
         retriever = get_retriever(api_key)
 
-        # 1. EKSTRAKSI DATA (Gunakan Prompt yang lebih ketat)
         extraction_prompt = f"""
         [SYSTEM: OUTPUT ONLY VALID JSON. NO PREAMBLE.]
         Tugas: Klasifikasikan pesan user dan ekstrak data jika ada.
@@ -109,34 +106,24 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 json_str = json_match.group()
-                # Hapus trailing commas yang sering merusak json.loads
                 json_str = re.sub(r',\s*([\]}])', r'\1', json_str)
                 data = json.loads(json_str)
             else:
                 data = {"is_detection": False}
         except Exception as parse_error:
-            # DEBUG: Cetak error parsing jika ada
             print(f"!!! JSON Parsing Error: {parse_error}")
             data = {"is_detection": False}
 
 
-        # --- VALIDASI GANDA (Sisi Python) ---
         is_det = str(data.get("is_detection")).lower() == 'true'
         features = data.get("features", [])
         
-        # Cek apakah ada nilai None/null di dalam list fitur
         has_null = features is None or (isinstance(features, list) and (None in features or len(features) < 7))
         
-        # Paksa data_lengkap menjadi False jika masih ada null
         is_full = (str(data.get("data_lengkap")).lower() == 'true') and not has_null
 
         # --- LOGIKA FOLLOW-UP ---
-        # Jika user ingin deteksi tapi data belum lengkap
-        # is_det = str(data.get("is_detection")).lower() == 'true'
-        # is_full = str(data.get("data_lengkap")).lower() == 'true'
-
         if is_det and not is_full:
-            # Jika LLM lupa mengisi data_kurang padahal ada yang null, kita beri default
             missing = data.get("data_kurang", [])
             if not missing:
                 missing = ["Data kelahiran (Berat/Tinggi) atau status ASI"]
@@ -144,10 +131,8 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
             missing_fields = ", ".join(missing)
             return f"Saya siap membantu menganalisis status stunting si kecil. Namun, saya butuh data: **{missing_fields}**."
         
-        # KONDISI 2: User ingin deteksi dan data lengkap
         detection_result = "User bertanya secara umum."
         if is_det and is_full:
-            # Pastikan key 'features' ada dan isinya list
             features = data.get("features")
             if features and len(features) == 7:
                 try:
@@ -157,7 +142,6 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
                     print(f"!!! Prediction Error: {pred_error}")
                     detection_result = "Gagal menjalankan model prediksi."
 
-        # --- LOGIKA RAG (Generate Jawaban Akhir) ---
         system_prompt = (
             "Anda adalah asisten kesehatan ahli stunting yang ramah. "
             "Informasi Tambahan: {detection_info}. "
@@ -170,14 +154,13 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
             ("human", "{input}"),
         ])
 
-        # Bangun RAG Chain
         question_answer_chain = create_stuff_documents_chain(llm, prompt)
         rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
         print("RAG Chain created successfully.", detection_result)
         response = rag_chain.invoke({
             "input": user_input,
-            "detection_info": detection_result # Menyuntikkan hasil CNN ke prompt
+            "detection_info": detection_result 
         })
         
         return response["answer"]
