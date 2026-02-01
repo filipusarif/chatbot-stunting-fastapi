@@ -99,9 +99,9 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
         
         extraction_response = llm.invoke(extraction_prompt)
         content = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
-        print("--- DEBUG RAW LLM OUTPUT ---")
-        print(content)
-        print("-----------------------------")
+        # print("--- DEBUG RAW LLM OUTPUT ---")
+        # print(content)
+        # print("-----------------------------")
         try:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
@@ -157,7 +157,7 @@ def get_chat_response_with_rag(user_input: str, api_key: str) -> str:
         question_answer_chain = create_stuff_documents_chain(llm, prompt)
         rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
-        print("RAG Chain created successfully.", detection_result)
+        # print("RAG Chain created successfully.", detection_result)
         response = rag_chain.invoke({
             "input": user_input,
             "detection_info": detection_result 
