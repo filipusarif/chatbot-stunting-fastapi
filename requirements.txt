@@ -13,3 +13,6 @@ joblib
 numpy
 scikit-learn
 pandas
+rouge_score
+evaluate
+requests
