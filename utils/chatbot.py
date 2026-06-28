@@ -20,7 +20,7 @@ DB_FAISS_PATH = "vectorstore/db_faiss"
 def get_models(api_key: str):
     """Inisialisasi LLM dan Embeddings dengan API Key dari Laravel"""
     llm = ChatNVIDIA(
-        model="meta/llama3-70b-instruct", 
+        model="meta/llama-3.1-70b-instruct", 
         nvidia_api_key=api_key, 
         temperature=0.5
     )
